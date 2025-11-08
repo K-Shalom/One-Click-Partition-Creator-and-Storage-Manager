@@ -44,7 +44,7 @@ public class UserDashboard extends JFrame {
                 addLog(username + " logged out");
                 if (autoRefreshTimer != null) autoRefreshTimer.cancel();
                 dispose();
-                new LoginForm().setVisible(true); // assume LoginForm exists
+                new LoginForm().setVisible(true);
             }
         });
         header.add(logoutBtn, BorderLayout.EAST);
@@ -53,10 +53,7 @@ public class UserDashboard extends JFrame {
         // ---------------- TABS ----------------
         JTabbedPane tabs = new JTabbedPane();
 
-        // Advanced Disk Monitor tab
         tabs.addTab("💾 Disk Monitor (Advanced)", createDiskTabAdvanced());
-
-        // Activity Logs tab
         tabs.addTab("📜 Activity Logs", createLogTab());
 
         add(tabs, BorderLayout.CENTER);
@@ -77,7 +74,7 @@ public class UserDashboard extends JFrame {
         addLog(username + " logged in");
     }
 
-    // ---------------- ADVANCED DISK TAB WITH DROPDOWN ----------------
+    // ---------------- ADVANCED DISK TAB ----------------
     private JPanel createDiskTabAdvanced() {
         diskPanel = new JPanel();
         diskPanel.setLayout(new BoxLayout(diskPanel, BoxLayout.Y_AXIS));
@@ -86,47 +83,7 @@ public class UserDashboard extends JFrame {
         JScrollPane scroll = new JScrollPane(diskPanel);
         scroll.setBorder(BorderFactory.createTitledBorder("Detected Drives"));
 
-        // Dropdown menu for all disk actions
-        JButton menuButton = new JButton("Disk Actions ▼");
-        menuButton.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        menuButton.setBackground(new Color(52, 152, 219));
-        menuButton.setForeground(Color.WHITE);
-        menuButton.setFocusPainted(false);
-
-        JPopupMenu popupMenu = new JPopupMenu();
-        String[] actions = {
-                "Shrink Volume",
-                "New Sample Volume",
-                "Format Volume",
-                "Delete Volume",
-                "Extend Volume",
-                "Rename Volume",
-                "Change Drive Letter"
-        };
-
-        for (String action : actions) {
-            JMenuItem item = new JMenuItem(action);
-            item.addActionListener(e -> {
-                switch (action) {
-                    case "Shrink Volume": executeShrinkVolume(); break;
-                    case "New Sample Volume": executeNewSampleVolume(); break;
-                    case "Format Volume": executeFormatVolume(); break;
-                    case "Delete Volume": executeDeleteVolume(); break;
-                    case "Extend Volume": executeExtendVolume(); break;
-                    case "Rename Volume": executeRenameVolume(); break;
-                    case "Change Drive Letter": executeChangeDriveLetter(); break;
-                }
-            });
-            popupMenu.add(item);
-        }
-
-        menuButton.addActionListener(e -> popupMenu.show(menuButton, 0, menuButton.getHeight()));
-
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
-        topPanel.add(menuButton);
-
         JPanel panel = new JPanel(new BorderLayout(10, 10));
-        panel.add(topPanel, BorderLayout.NORTH);
         panel.add(scroll, BorderLayout.CENTER);
 
         detectDisksAdvanced();
@@ -138,11 +95,13 @@ public class UserDashboard extends JFrame {
     private void detectDisksAdvanced() {
         diskPanel.removeAll();
         File[] roots = File.listRoots();
+        long totalDiskSize = 0;
 
-        if (roots != null && roots.length > 0) {
+        if (roots != null) {
             for (File root : roots) {
                 long free = root.getFreeSpace();
                 long total = root.getTotalSpace();
+                totalDiskSize += total;
                 int usedPercent = total > 0 ? (int) (((double) (total - free) / total) * 100) : 0;
 
                 JPanel card = new JPanel(new BorderLayout(10, 5));
@@ -165,16 +124,102 @@ public class UserDashboard extends JFrame {
                 card.add(label, BorderLayout.NORTH);
                 card.add(progress, BorderLayout.SOUTH);
 
+                // Right-click menu for partitions
+                JPopupMenu partitionMenu = new JPopupMenu();
+                String[] actions = {"Shrink Volume", "Format Volume", "Delete Volume", "Extend Volume", "Rename Volume", "Change Drive Letter"};
+                for (String action : actions) {
+                    JMenuItem item = new JMenuItem(action);
+                    item.addActionListener(e -> {
+                        switch (action) {
+                            case "Shrink Volume": executeShrinkVolume(); break;
+                            case "Format Volume": executeFormatVolume(); break;
+                            case "Delete Volume": executeDeleteVolume(); break;
+                            case "Extend Volume": executeExtendVolume(); break;
+                            case "Rename Volume": executeRenameVolume(); break;
+                            case "Change Drive Letter": executeChangeDriveLetter(); break;
+                        }
+                        detectDisksAdvanced();
+                    });
+                    partitionMenu.add(item);
+                }
+                card.setComponentPopupMenu(partitionMenu);
+
                 diskPanel.add(Box.createVerticalStrut(8));
                 diskPanel.add(card);
             }
-        } else {
+        }
+
+        // Unallocated spaces
+        ArrayList<Long> unallocatedSpaces = getUnallocatedSpaces();
+        for (Long size : unallocatedSpaces) {
+            long sizeGB = size / (1024L * 1024L * 1024L);
+            if (sizeGB < 1) continue;
+
+            double percent = ((double) size / totalDiskSize) * 100;
+
+            JPanel unallocatedCard = new JPanel(new BorderLayout(10, 5));
+            unallocatedCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 60));
+            unallocatedCard.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY));
+            unallocatedCard.setBackground(new Color(245, 245, 245));
+
+            JLabel label = new JLabel("💿 Unallocated Space: " + sizeGB + " GB (" + String.format("%.1f", percent) + "% of total)");
+            label.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+            label.setForeground(Color.DARK_GRAY);
+
+            JProgressBar progress = new JProgressBar(0, 100);
+            progress.setValue((int) percent);
+            progress.setBackground(new Color(245, 245, 245));
+            progress.setForeground(new Color(200, 200, 200));
+
+            unallocatedCard.add(label, BorderLayout.NORTH);
+            unallocatedCard.add(progress, BorderLayout.SOUTH);
+
+            // Right-click menu for unallocated
+            JPopupMenu unallocatedMenu = new JPopupMenu();
+            JMenuItem newVol = new JMenuItem("New Sample Volume");
+            newVol.addActionListener(e -> {
+                executeNewSampleVolume();
+                detectDisksAdvanced();
+            });
+            unallocatedMenu.add(newVol);
+            unallocatedCard.setComponentPopupMenu(unallocatedMenu);
+
+            diskPanel.add(Box.createVerticalStrut(5));
+            diskPanel.add(unallocatedCard);
+        }
+
+        if ((roots == null || roots.length == 0) && unallocatedSpaces.isEmpty()) {
             JLabel noDiskLabel = new JLabel("No drives detected.");
             diskPanel.add(noDiskLabel);
         }
 
         diskPanel.revalidate();
         diskPanel.repaint();
+    }
+
+    private ArrayList<Long> getUnallocatedSpaces() {
+        ArrayList<Long> unallocatedList = new ArrayList<>();
+        try {
+            String command = "Get-Disk | ForEach-Object { $_.LargestFreeExtent }";
+            ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", command);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) {
+                    try {
+                        long bytes = Long.parseLong(line);
+                        if (bytes > 0) unallocatedList.add(bytes);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+            reader.close();
+        } catch (Exception e) {
+            addLog("Error detecting unallocated space: " + e.getMessage());
+        }
+        return unallocatedList;
     }
 
     // ---------------- LOG TAB ----------------
@@ -188,7 +233,6 @@ public class UserDashboard extends JFrame {
         return panel;
     }
 
-    // ---------------- AUTO REFRESH ----------------
     private void startAutoRefresh() {
         if (autoRefreshTimer != null) autoRefreshTimer.cancel();
         autoRefreshTimer = new java.util.Timer();
@@ -197,10 +241,9 @@ public class UserDashboard extends JFrame {
             public void run() {
                 SwingUtilities.invokeLater(() -> detectDisksAdvanced());
             }
-        }, 0, 2500); // Refresh every 2.5 seconds
+        }, 0, 2000); // Refresh every 2s
     }
 
-    // ---------------- LOG MANAGEMENT ----------------
     private void addLog(String message) {
         String logEntry = "[" + java.time.LocalTime.now().withNano(0) + "] " + message;
         logs.add(logEntry);
@@ -220,14 +263,8 @@ public class UserDashboard extends JFrame {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter to shrink (e.g., C):");
         String size = JOptionPane.showInputDialog(this, "Enter size to shrink in GB (e.g., 50):");
         if (drive != null && size != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to shrink drive " + drive + " by " + size + "GB?",
-                    "Confirm Shrink", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Resize-Partition -DriveLetter " + drive + " -Size " + size + "GB -Confirm:$false";
-                runPowerShell(command);
-                addLog("Shrink Volume executed on " + drive + " by " + username);
-            }
+            runPowerShell("Resize-Partition -DriveLetter " + drive + " -Size " + size + "GB -Confirm:$false");
+            addLog("Shrink Volume executed on " + drive + " by " + username);
         }
     }
 
@@ -236,15 +273,9 @@ public class UserDashboard extends JFrame {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter to format (e.g., E):");
         String filesystem = JOptionPane.showInputDialog(this, "Enter FileSystem (NTFS/FAT32/exFAT):");
         if (diskNumber != null && filesystem != null && drive != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to create a new volume on Disk " + diskNumber + " as drive " + drive + "?",
-                    "Confirm New Volume", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "New-Partition -DiskNumber " + diskNumber + " -UseMaximumSize -AssignDriveLetter | " +
-                        "Format-Volume -DriveLetter " + drive + " -FileSystem " + filesystem + " -NewFileSystemLabel 'New Volume' -Confirm:$false";
-                runPowerShell(command);
-                addLog("New Sample Volume executed on Disk " + diskNumber);
-            }
+            runPowerShell("New-Partition -DiskNumber " + diskNumber + " -UseMaximumSize -AssignDriveLetter | " +
+                    "Format-Volume -DriveLetter " + drive + " -FileSystem " + filesystem + " -NewFileSystemLabel 'New Volume' -Confirm:$false");
+            addLog("New Sample Volume executed on Disk " + diskNumber);
         }
     }
 
@@ -252,28 +283,16 @@ public class UserDashboard extends JFrame {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter to format (e.g., E):");
         String filesystem = JOptionPane.showInputDialog(this, "Enter FileSystem (NTFS/FAT32/exFAT):");
         if (drive != null && filesystem != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to format drive " + drive + " as " + filesystem + "?",
-                    "Confirm Format", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Format-Volume -DriveLetter " + drive + " -FileSystem " + filesystem + " -Confirm:$false";
-                runPowerShell(command);
-                addLog("Format Volume executed on " + drive);
-            }
+            runPowerShell("Format-Volume -DriveLetter " + drive + " -FileSystem " + filesystem + " -Confirm:$false");
+            addLog("Format Volume executed on " + drive);
         }
     }
 
     private void executeDeleteVolume() {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter to delete (e.g., E):");
         if (drive != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to DELETE drive " + drive + "? This action cannot be undone!",
-                    "Confirm Delete", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Remove-Partition -DriveLetter " + drive + " -Confirm:$false";
-                runPowerShell(command);
-                addLog("Delete Volume executed on " + drive);
-            }
+            runPowerShell("Remove-Partition -DriveLetter " + drive + " -Confirm:$false");
+            addLog("Delete Volume executed on " + drive);
         }
     }
 
@@ -281,14 +300,8 @@ public class UserDashboard extends JFrame {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter to extend (e.g., C):");
         String newSize = JOptionPane.showInputDialog(this, "Enter new total size in GB (e.g., 400):");
         if (drive != null && newSize != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to extend drive " + drive + " to " + newSize + "GB?",
-                    "Confirm Extend", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Resize-Partition -DriveLetter " + drive + " -Size " + newSize + "GB -Confirm:$false";
-                runPowerShell(command);
-                addLog("Extend Volume executed on " + drive);
-            }
+            runPowerShell("Resize-Partition -DriveLetter " + drive + " -Size " + newSize + "GB -Confirm:$false");
+            addLog("Extend Volume executed on " + drive);
         }
     }
 
@@ -296,14 +309,8 @@ public class UserDashboard extends JFrame {
         String drive = JOptionPane.showInputDialog(this, "Enter Drive Letter (e.g., E):");
         String newName = JOptionPane.showInputDialog(this, "Enter new volume name:");
         if (drive != null && newName != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to rename drive " + drive + " to '" + newName + "'?",
-                    "Confirm Rename", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Set-Volume -DriveLetter " + drive + " -NewFileSystemLabel '" + newName + "' -Confirm:$false";
-                runPowerShell(command);
-                addLog("Rename Volume executed on " + drive + " as " + newName);
-            }
+            runPowerShell("Set-Volume -DriveLetter " + drive + " -NewFileSystemLabel '" + newName + "'");
+            addLog("Rename Volume executed on " + drive + " as " + newName);
         }
     }
 
@@ -311,14 +318,8 @@ public class UserDashboard extends JFrame {
         String oldDrive = JOptionPane.showInputDialog(this, "Enter current Drive Letter (e.g., E):");
         String newDrive = JOptionPane.showInputDialog(this, "Enter new Drive Letter (e.g., D):");
         if (oldDrive != null && newDrive != null) {
-            int confirm = JOptionPane.showConfirmDialog(this,
-                    "Are you sure you want to change drive letter from " + oldDrive + " to " + newDrive + "?",
-                    "Confirm Change Letter", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                String command = "Set-Partition -DriveLetter " + oldDrive + " -NewDriveLetter " + newDrive + " -Confirm:$false";
-                runPowerShell(command);
-                addLog("Change Drive Letter executed: " + oldDrive + " -> " + newDrive);
-            }
+            runPowerShell("Set-Partition -DriveLetter " + oldDrive + " -NewDriveLetter " + newDrive);
+            addLog("Change Drive Letter executed: " + oldDrive + " -> " + newDrive);
         }
     }
 
