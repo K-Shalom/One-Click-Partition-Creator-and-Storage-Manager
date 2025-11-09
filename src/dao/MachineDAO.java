@@ -19,7 +19,7 @@ public class MachineDAO {
      * @return true if successful, false otherwise
      */
     public boolean createMachine(Machine machine) {
-        String sql = "INSERT INTO machines (user_id, machine_name, ip_address) VALUES (?, ?, ?)";
+        String sql = "INSERT INTO machines(user_id, machine_name, ip_address) VALUES (?, ?, ?)";
         
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
@@ -39,7 +39,7 @@ public class MachineDAO {
             }
             
         } catch (SQLException e) {
-            System.err.println("Error creating machine: " + e.getMessage());
+            System.err.println("Error Creating machine: " + e.getMessage());
             e.printStackTrace();
         }
         return false;
@@ -69,14 +69,14 @@ public class MachineDAO {
             }
             
         } catch (SQLException e) {
-            System.err.println("Error getting machine: " + e.getMessage());
+            System.err.println("Error Getting machine: " + e.getMessage());
             e.printStackTrace();
         }
         return null;
     }
     
     /**
-     * Get all machines for a specific user
+     * Get all machines for a specific user where User_id = to someone's id
      * @param userId User ID
      * @return List of machines belonging to the user
      */
@@ -107,7 +107,7 @@ public class MachineDAO {
     }
     
     /**
-     * Get all machines
+     * Get all machines from database
      * @return List of all machines
      */
     public List<Machine> getAllMachines() {
@@ -126,7 +126,6 @@ public class MachineDAO {
                     rs.getString("ip_address")
                 ));
             }
-            
         } catch (SQLException e) {
             System.err.println("Error getting all machines: " + e.getMessage());
             e.printStackTrace();
