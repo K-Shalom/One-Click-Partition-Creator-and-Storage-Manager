@@ -1,5 +1,8 @@
 package gui;
 
+import dao.UserDAO;
+import models.User;
+
 import javax.swing.*;
 import java.awt.*;
 
@@ -8,8 +11,10 @@ public class SignupForm extends JFrame {
     private JTextField usernameField;
     private JPasswordField passwordField;
     private JButton signupButton, backButton;
+    private UserDAO userDAO;
 
     public SignupForm() {
+        userDAO = new UserDAO();
         setTitle("One Click - Create Account");
         setSize(400, 320);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -63,19 +68,66 @@ public class SignupForm extends JFrame {
         String username = usernameField.getText().trim();
         String password = new String(passwordField.getPassword());
 
+        // Validation
         if (username.isEmpty() || password.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Fill all fields!", "Warning", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Please fill in all fields!", "Warning", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        if (LoginForm.users.containsKey(username)) {
-            JOptionPane.showMessageDialog(this, "Username already exists!", "Error", JOptionPane.ERROR_MESSAGE);
+        if (username.length() < 3) {
+            JOptionPane.showMessageDialog(this, "Username must be at least 3 characters long!", "Warning", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        LoginForm.users.put(username, password);
-        JOptionPane.showMessageDialog(this, "Account created! You can now login.");
-        dispose();
-        new LoginForm().setVisible(true);
+        if (password.length() < 4) {
+            JOptionPane.showMessageDialog(this, "Password must be at least 4 characters long!", "Warning", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        try {
+            // Check if username already exists
+            System.out.println("Checking if username exists: " + username);
+            if (userDAO.usernameExists(username)) {
+                JOptionPane.showMessageDialog(this, 
+                    "Username '" + username + "' already exists!\nPlease choose a different username.", 
+                    "Username Taken", 
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            // Create new user (default role is USER)
+            System.out.println("Creating new user: " + username);
+            User newUser = new User(username, password, "USER");
+            
+            boolean success = userDAO.createUser(newUser);
+            System.out.println("User creation result: " + success);
+            
+            if (success) {
+                JOptionPane.showMessageDialog(this, 
+                    "Account created successfully!\n\nUsername: " + username + "\n\nYou can now login.", 
+                    "Success", 
+                    JOptionPane.INFORMATION_MESSAGE);
+                
+                // Clear fields
+                usernameField.setText("");
+                passwordField.setText("");
+                
+                // Go back to login
+                dispose();
+                new LoginForm().setVisible(true);
+            } else {
+                JOptionPane.showMessageDialog(this, 
+                    "Error creating account!\n\nPossible causes:\n- Database connection failed\n- Database error\n\nCheck console for details.", 
+                    "Error", 
+                    JOptionPane.ERROR_MESSAGE);
+            }
+        } catch (Exception ex) {
+            System.err.println("Exception during signup: " + ex.getMessage());
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, 
+                "An error occurred!\n\nError: " + ex.getMessage() + "\n\nCheck console for details.", 
+                "Error", 
+                JOptionPane.ERROR_MESSAGE);
+        }
     }
 }
