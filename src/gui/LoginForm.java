@@ -9,7 +9,6 @@ import models.Machine;
 import models.Partition;
 import gui.PartitionStorage.PartitionInfo;
 import utils.ActivityLogger;
-
 import javax.swing.*;
 import java.awt.*;
 import java.sql.Date;
@@ -141,10 +140,7 @@ public class LoginForm extends JFrame {
             } else {
                 JOptionPane.showMessageDialog(this, 
                     "Invalid credentials!\n\n" +
-                    "Please check your username and password.\n\n" +
-                    "Default admin login:\n" +
-                    "Username: admin\n" +
-                    "Password: admin123", 
+                    "Please check your username and password.\n\n",
                     "Login Failed", 
                     JOptionPane.ERROR_MESSAGE);
             }
