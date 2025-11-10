@@ -1,5 +1,6 @@
 package gui;
 
+import utils.BackupManager;
 import dao.UserDAO;
 import dao.ActivityLogDAO;
 import dao.MachineDAO;
@@ -115,18 +116,19 @@ public class AdminDashboard extends JFrame {
         });
 
         backupBtn.addActionListener(e -> {
-            int index = tabs.indexOfTab("Backup");
-            if (index == -1) {
-                JPanel backupPanel = new JPanel(new BorderLayout());
-                backupPanel.add(new JLabel("Backup Feature Coming Soon!", JLabel.CENTER), BorderLayout.CENTER);
-                tabs.addTab("Backup", backupPanel);
-                tabs.setSelectedComponent(backupPanel);
-            } else {
-                tabs.setSelectedIndex(index);
-            }
-            addLog(currentUser.getUsername() + " used Backup feature");
-            ActivityLogger.logCustomAction(currentUser.getUserId(), PartitionOperations.getMachineId(currentUser, machineDAO), "Accessed Backup feature");
+            new Thread(() -> {
+                addLog(currentUser.getUsername() + " started database backup...");
+                String result = BackupManager.backupDatabase();
+                if (result != null) {
+                    addLog(currentUser.getUsername() + " backup completed successfully.");
+                } else {
+                    addLog(currentUser.getUsername() + " backup failed!");
+                }
+
+                SwingUtilities.invokeLater(() -> BackupManager.showBackupResult(result));
+            }).start();
         });
+
 
         toolbar.add(remoteBtn);
         toolbar.add(backupBtn);
