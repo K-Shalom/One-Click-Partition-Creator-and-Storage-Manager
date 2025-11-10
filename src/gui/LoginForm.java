@@ -98,7 +98,7 @@ public class LoginForm extends JFrame {
             if (DatabaseConnection.getConnection() == null) {
                 JOptionPane.showMessageDialog(this, 
                     "Database Connection Failed!\n\n" +
-                    "Possible causes:\n" +
+                    "Possible causes  please check:\n" +
                     "1. MySQL JDBC Driver not found\n" +
                     "   - Download mysql-connector-java JAR\n" +
                     "   - Add to project classpath\n\n" +
