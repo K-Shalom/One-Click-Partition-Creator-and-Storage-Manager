@@ -1,13 +1,12 @@
 package gui;
 
-import dao.PartitionDAO;
 import dao.ActivityLogDAO;
 import dao.MachineDAO;
-import dao.UserDAO;
 import models.User;
-import models.Partition;
 import models.ActivityLog;
 import models.Machine;
+import utils.ActivityLogger;
+import utils.PartitionOperations;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
@@ -25,19 +24,15 @@ public class UserDashboard extends JFrame {
     private JTabbedPane tabs;
     
     // DAOs for database access
-    private PartitionDAO partitionDAO;
     private ActivityLogDAO activityLogDAO;
     private MachineDAO machineDAO;
-    private UserDAO userDAO;
 
     public UserDashboard(User user) {
         this.currentUser = user;
         
         // Initialize DAOs
-        this.partitionDAO = new PartitionDAO();
         this.activityLogDAO = new ActivityLogDAO();
         this.machineDAO = new MachineDAO();
-        this.userDAO = new UserDAO();
 
         setTitle("User Dashboard - " + user.getUsername());
         setSize(950, 600);
@@ -64,6 +59,7 @@ public class UserDashboard extends JFrame {
             int confirm = JOptionPane.showConfirmDialog(this, "Do you want to logout?", "Logout", JOptionPane.YES_NO_OPTION);
             if (confirm == JOptionPane.YES_OPTION) {
                 addLog(currentUser.getUsername() + " logged out");
+                ActivityLogger.logLogout(currentUser.getUserId(), PartitionOperations.getMachineId(currentUser, machineDAO));
                 if (autoRefreshTimer != null) autoRefreshTimer.stop();
                 dispose();
                 new LoginForm().setVisible(true);
@@ -134,7 +130,12 @@ public class UserDashboard extends JFrame {
                 ));
                 card.setBackground(Color.WHITE);
 
-                JLabel label = new JLabel(root.getAbsolutePath() + " — Free: " + (free/(1024*1024*1024)) + "GB / Total: " + (total/(1024*1024*1024)) + "GB");
+                // Get volume label
+                String driveLetter = root.getAbsolutePath().replace("\\", "").replace(":", "");
+                String volumeLabel = PartitionOperations.getVolumeLabel(driveLetter);
+                String displayName = volumeLabel.isEmpty() ? root.getAbsolutePath() : volumeLabel + " (" + root.getAbsolutePath() + ")";
+                
+                JLabel label = new JLabel(displayName + " — Free: " + (free/(1024*1024*1024)) + "GB / Total: " + (total/(1024*1024*1024)) + "GB");
                 label.setFont(new Font("Segoe UI", Font.PLAIN, 14));
 
                 JProgressBar progress = new JProgressBar(0,100);
@@ -152,19 +153,30 @@ public class UserDashboard extends JFrame {
                 for(String action : actions){
                     JMenuItem item = new JMenuItem(action);
                     item.addActionListener(e -> {
-                        String driveLetter = root.getAbsolutePath().replace("\\", "");
+                        String actionDriveLetter = root.getAbsolutePath().replace("\\", "");
                         long freeBytes = root.getFreeSpace();
                         long totalBytes = root.getTotalSpace();
 
                         switch (action){
-                            case "Shrink Volume": executeShrinkVolume(driveLetter, totalBytes, freeBytes); break;
-                            case "Format Volume": executeFormatVolume(driveLetter); break;
-                            case "Delete Volume": executeDeleteVolume(driveLetter); break;
-                            case "Extend Volume": executeExtendVolume(driveLetter, totalBytes, freeBytes); break;
-                            case "Rename Volume": executeRenameVolume(driveLetter); break;
-                            case "Change Drive Letter": executeChangeDriveLetter(driveLetter); break;
+                            case "Shrink Volume": 
+                                PartitionOperations.executeShrinkVolume(UserDashboard.this, actionDriveLetter, totalBytes, freeBytes, currentUser, machineDAO, () -> detectDisks());
+                                break;
+                            case "Format Volume": 
+                                PartitionOperations.executeFormatVolume(UserDashboard.this, actionDriveLetter, currentUser, machineDAO, () -> detectDisks());
+                                break;
+                            case "Delete Volume": 
+                                PartitionOperations.executeDeleteVolume(UserDashboard.this, actionDriveLetter, currentUser, machineDAO, () -> detectDisks());
+                                break;
+                            case "Extend Volume": 
+                                PartitionOperations.executeExtendVolume(UserDashboard.this, actionDriveLetter, totalBytes, freeBytes, currentUser, machineDAO, () -> detectDisks());
+                                break;
+                            case "Rename Volume": 
+                                PartitionOperations.executeRenameVolume(UserDashboard.this, actionDriveLetter, currentUser, machineDAO, () -> detectDisks());
+                                break;
+                            case "Change Drive Letter": 
+                                PartitionOperations.executeChangeDriveLetter(UserDashboard.this, actionDriveLetter, currentUser, machineDAO, () -> detectDisks());
+                                break;
                         }
-                        detectDisks();
                     });
                     partitionMenu.add(item);
                 }
@@ -203,8 +215,7 @@ public class UserDashboard extends JFrame {
             JMenuItem newVol = new JMenuItem("New Sample Volume");
             newVol.addActionListener(e -> {
                 long diskNumber = 0; // can implement automatic detection as in Admin
-                executeNewSampleVolume(diskNumber);
-                detectDisks();
+                PartitionOperations.executeNewSampleVolume(UserDashboard.this, diskNumber, currentUser, machineDAO, () -> detectDisks());
             });
             unallocatedMenu.add(newVol);
             unallocatedCard.setComponentPopupMenu(unallocatedMenu);
@@ -221,6 +232,7 @@ public class UserDashboard extends JFrame {
         diskPanel.revalidate();
         diskPanel.repaint();
     }
+    
 
     private ArrayList<Long> getUnallocatedSpaces(){
         ArrayList<Long> unallocatedList = new ArrayList<>();
@@ -261,6 +273,7 @@ public class UserDashboard extends JFrame {
         refreshLogsBtn.addActionListener(e -> {
             loadActivityLogsFromDatabase();
             addLog(currentUser.getUsername() + " refreshed activity logs");
+            ActivityLogger.logCustomAction(currentUser.getUserId(), PartitionOperations.getMachineId(currentUser, machineDAO), "Refreshed activity logs");
         });
         
         panel.add(new JScrollPane(logArea), BorderLayout.CENTER);
@@ -339,130 +352,14 @@ public class UserDashboard extends JFrame {
     }
 
     // ------------------- POWERSHELL METHODS -------------------
-    private void executeShrinkVolume(String drive, long totalBytes, long freeBytes){
-        double totalGB = totalBytes/1_073_741_824.0;
-        double freeGB = freeBytes/1_073_741_824.0;
 
-        String shrinkInput = JOptionPane.showInputDialog(this,"Enter amount to shrink (GB):",String.format("%.2f", freeGB));
-        if(shrinkInput!=null && !shrinkInput.trim().isEmpty()){
-            try{
-                double shrinkBy = Double.parseDouble(shrinkInput.trim());
-                double newSize = totalGB - shrinkBy;
-                if(newSize<=0){ JOptionPane.showMessageDialog(this,"Shrink too large! Resulting size invalid.","Error",JOptionPane.ERROR_MESSAGE); return;}
-                String cmd = "Resize-Partition -DriveLetter "+drive+" -Size "+newSize+"GB -Confirm:$false";
-                addLog("Executing Shrink Volume on "+drive+" by "+shrinkBy+"GB...");
-                runPowerShellAsync(cmd,"Shrink Volume on "+drive+" by "+shrinkBy+"GB");
-            }catch(NumberFormatException ex){JOptionPane.showMessageDialog(this,"Invalid number format. Enter numeric GB.","Error",JOptionPane.ERROR_MESSAGE);}
-        }
-    }
 
-    private void executeExtendVolume(String drive,long totalBytes,long unallocatedBytes){
-        double totalGB = totalBytes/1_073_741_824.0;
-        double unallocatedGB = unallocatedBytes/1_073_741_824.0;
 
-        String extendInput = JOptionPane.showInputDialog(this,"Enter amount to extend (GB):",String.format("%.2f", unallocatedGB));
-        if(extendInput!=null && !extendInput.trim().isEmpty()){
-            try{
-                double extendBy = Double.parseDouble(extendInput.trim());
-                if(extendBy>unallocatedGB) extendBy = unallocatedGB;
-                double newSize = totalGB + extendBy;
-                String cmd = "Resize-Partition -DriveLetter "+drive+" -Size "+newSize+"GB -Confirm:$false";
-                addLog("Executing Extend Volume on "+drive+" by "+extendBy+"GB...");
-                runPowerShellAsync(cmd,"Extend Volume on "+drive+" by "+extendBy+"GB");
-            }catch(NumberFormatException ex){JOptionPane.showMessageDialog(this,"Invalid number format. Enter numeric GB.","Error",JOptionPane.ERROR_MESSAGE);}
-        }
-    }
 
-    private void executeFormatVolume(String drive){
-        String[] fileSystems = {"NTFS","FAT32","exFAT"};
-        String filesystem = (String) JOptionPane.showInputDialog(this,"Select FileSystem:","Format Volume",JOptionPane.QUESTION_MESSAGE,null,fileSystems,fileSystems[0]);
-        if(filesystem!=null){
-            String cmd = "Format-Volume -DriveLetter "+drive+" -FileSystem "+filesystem+" -Confirm:$false";
-            addLog("Executing Format Volume on "+drive+"...");
-            runPowerShellAsync(cmd,"Format Volume on "+drive);
-        }
-    }
 
-    private void executeDeleteVolume(String drive){
-        int confirm = JOptionPane.showConfirmDialog(this,"Are you sure you want to delete drive "+drive+"?","Delete Volume",JOptionPane.YES_NO_OPTION);
-        if(confirm==JOptionPane.YES_OPTION){
-            String cmd = "Remove-Partition -DriveLetter "+drive+" -Confirm:$false";
-            addLog("Executing Delete Volume on "+drive+"...");
-            runPowerShellAsync(cmd,"Delete Volume on "+drive);
-        }
-    }
 
-    private void executeRenameVolume(String drive){
-        if(drive==null || drive.trim().isEmpty()) return;
-        String newName = JOptionPane.showInputDialog(this,"Enter new volume name:");
-        if(newName!=null && !newName.trim().isEmpty()){
-            drive = drive.replace(":","").trim().toUpperCase();
-            newName = newName.trim();
-            String cmd = "$vol = Get-Volume -DriveLetter "+drive+"; if ($vol -ne $null) { Set-Volume -DriveLetter "+drive+" -NewFileSystemLabel \""+newName+"\"; Write-Output 'Volume renamed to "+newName+"' } else { Write-Error 'Volume not found.' }";
-            addLog("Attempting Rename Volume on "+drive+" to "+newName+"...");
-            runPowerShellAsync(cmd,"Rename Volume "+drive+" -> "+newName);
-        }
-    }
 
-    private void executeChangeDriveLetter(String oldDrive){
-        if(oldDrive==null || oldDrive.trim().isEmpty()) return;
-        String newDrive = JOptionPane.showInputDialog(this,"Enter new Drive Letter (e.g., D):");
-        if(newDrive!=null && !newDrive.trim().isEmpty()){
-            oldDrive = oldDrive.replace(":","").trim().toUpperCase();
-            newDrive = newDrive.replace(":","").trim().toUpperCase();
-            if(newDrive.length()!=1 || !Character.isLetter(newDrive.charAt(0))){ JOptionPane.showMessageDialog(this,"Invalid drive letter.","Error",JOptionPane.ERROR_MESSAGE); return;}
-            String cmd = "$part = Get-Partition -DriveLetter "+oldDrive+"; if ($part) { Set-Partition -DriveLetter "+oldDrive+" -NewDriveLetter "+newDrive+" -Confirm:$false; Write-Output 'Success' } else { Write-Error 'Partition not found or in use.' }";
-            addLog("Executing Change Drive Letter: "+oldDrive+" -> "+newDrive+"...");
-            runPowerShellAsync(cmd,"Change Drive Letter "+oldDrive+" -> "+newDrive);
-        }
-    }
-
-    private void executeNewSampleVolume(long diskNumber){
-        String[] fileSystems = {"NTFS","FAT32","exFAT"};
-        String filesystem = (String) JOptionPane.showInputDialog(this,"Select FileSystem:","New Sample Volume",JOptionPane.QUESTION_MESSAGE,null,fileSystems,fileSystems[0]);
-        String drive = JOptionPane.showInputDialog(this,"Enter Drive Letter to format (e.g., E):");
-        if(filesystem!=null && drive!=null){
-            String cmd = "New-Partition -DiskNumber "+diskNumber+" -UseMaximumSize -DriveLetter "+drive+" | Format-Volume -FileSystem "+filesystem+" -NewFileSystemLabel 'New Volume' -Confirm:$false";
-            addLog("Executing New Sample Volume on Disk "+diskNumber+"...");
-            runPowerShellAsync(cmd,"New Sample Volume on Disk "+diskNumber);
-        }
-    }
-
-    private void runPowerShellAsync(String command,String actionDescription){
-        JDialog loader = new JDialog(this, "OneClick Partition", true);
-        JLabel lbl = new JLabel(actionDescription+"...");
-        lbl.setBorder(new EmptyBorder(10,20,10,20));
-        loader.add(lbl);
-        loader.pack();
-        loader.setLocationRelativeTo(this);
-
-        new Thread(() -> {
-            try{
-                ProcessBuilder pb = new ProcessBuilder("powershell.exe","-Command",command);
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-
-                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                String line;
-                StringBuilder output = new StringBuilder();
-                while((line=reader.readLine())!=null) output.append(line).append("\n");
-                reader.close();
-                process.waitFor();
-
-                if(output.toString().contains("No MSFT_Partition objects found")){
-                    addLog("[ERROR] "+actionDescription+" failed: Partition not found.");
-                }else{
-                    addLog("[SUCCESS] "+actionDescription);
-                }
-            }catch(Exception e){
-                addLog("[ERROR] "+actionDescription+": "+e.getMessage());
-            }finally{
-                SwingUtilities.invokeLater(loader::dispose);
-            }
-        }).start();
-
-        loader.setVisible(true);
-    }
+    
 
     public static void main(String[] args){
         // For testing purposes - create a demo user
