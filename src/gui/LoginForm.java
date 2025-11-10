@@ -1,23 +1,35 @@
 package gui;
 
+import dao.UserDAO;
+import dao.MachineDAO;
+import dao.PartitionDAO;
+import database.DatabaseConnection;
+import models.User;
+import models.Machine;
+import models.Partition;
+import gui.PartitionStorage.PartitionInfo;
+import utils.ActivityLogger;
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.*;
-import java.util.HashMap;
+import java.sql.Date;
+import java.util.List;
 
 public class LoginForm extends JFrame {
 
     private JTextField usernameField;
     private JPasswordField passwordField;
     private JButton loginButton, signupButton;
-    // Temporary users storage
-    public static HashMap<String, String> users = new HashMap<>();
-
-    static {
-        users.put("admin", "12345"); // Default admin
-    }
+    private UserDAO userDAO;
+    private MachineDAO machineDAO;
+    private PartitionDAO partitionDAO;
+    
+    // Store logged in user
+    public static User currentUser = null;
 
     public LoginForm() {
+        userDAO = new UserDAO();
+        machineDAO = new MachineDAO();
+        partitionDAO = new PartitionDAO();
         setTitle("OneClick - Login");
         setSize(400, 320);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -81,19 +93,167 @@ public class LoginForm extends JFrame {
             return;
         }
 
-        if (username.equals("admin") && password.equals("12345")) {
-            JOptionPane.showMessageDialog(this, "Welcome Admin!");
-            new AdminDashboard(username).setVisible(true);
-            this.dispose();
-        } else if (users.containsKey(username) && users.get(username).equals(password)) {
-            JOptionPane.showMessageDialog(this, "Welcome " + username + "!");
-            new UserDashboard(username).setVisible(true);
-            this.dispose();
-        } else {
-            JOptionPane.showMessageDialog(this, "Invalid credentials!", "Error", JOptionPane.ERROR_MESSAGE);
+        try {
+            // Test database connection first
+            if (DatabaseConnection.getConnection() == null) {
+                JOptionPane.showMessageDialog(this, 
+                    "Database Connection Failed!\n\n" +
+                    "Possible causes:\n" +
+                    "1. MySQL JDBC Driver not found\n" +
+                    "   - Download mysql-connector-java JAR\n" +
+                    "   - Add to project classpath\n\n" +
+                    "2. MySQL/MariaDB not running\n" +
+                    "   - Start MySQL service\n\n" +
+                    "3. Database 'onclick_db' doesn't exist\n" +
+                    "   - Import onclick_db.sql\n\n" +
+                    "Check console for detailed error messages.", 
+                    "Database Error", 
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            // Authenticate user from database
+            User user = userDAO.authenticateUser(username, password);
+            
+            if (user != null) {
+                currentUser = user;
+                
+                // Get or create current machine for logging
+                Machine currentMachine = machineDAO.getOrCreateCurrentMachine(user.getUserId());
+                
+                // Log successful login activity
+                if (currentMachine != null) {
+                    ActivityLogger.logLogin(user.getUserId(), currentMachine.getMachineId());
+                }
+                
+                // Fetch and save partitions to database
+                saveSystemPartitionsToDatabase(user);
+                
+                if (user.isAdmin()) {
+                    JOptionPane.showMessageDialog(this, "Welcome Admin: " + user.getUsername() + "!");
+                    new AdminDashboard(user).setVisible(true);
+                } else {
+                    JOptionPane.showMessageDialog(this, "Welcome User: " + user.getUsername() + "!");
+                    new UserDashboard(user).setVisible(true);
+                }
+                this.dispose();
+            } else {
+                JOptionPane.showMessageDialog(this, 
+                    "Invalid credentials!\n\n" +
+                    "Please check your username and password.\n\n",
+                    "Login Failed", 
+                    JOptionPane.ERROR_MESSAGE);
+            }
+        } catch (Exception ex) {
+            System.err.println("Login error: " + ex.getMessage());
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, 
+                "An error occurred during login!\n\n" +
+                "Error: " + ex.getMessage() + "\n\n" +
+                "Check console for details.", 
+                "Error", 
+                JOptionPane.ERROR_MESSAGE);
         }
     }
 
+    /**
+     * Fetch system partitions and save them to the database
+     * @param user The logged-in user
+     */
+    private void saveSystemPartitionsToDatabase(User user) {
+        try {
+            System.out.println("\n=== Fetching and Saving System Partitions ===");
+            
+            // Get or create the current machine
+            Machine currentMachine = machineDAO.getOrCreateCurrentMachine(user.getUserId());
+            
+            if (currentMachine == null) {
+                System.err.println("Error: Could not get or create current machine");
+                return;
+            }
+            
+            System.out.println("Machine: " + currentMachine.getMachineName() + " (ID: " + currentMachine.getMachineId() + ")");
+            
+            // Get all system partitions
+            List<PartitionInfo> systemPartitions = PartitionStorage.getSystemPartitions();
+            
+            if (systemPartitions.isEmpty()) {
+                System.out.println("No partitions detected on this system");
+                return;
+            }
+            
+            System.out.println("Found " + systemPartitions.size() + " partition(s)");
+            
+            int savedCount = 0;
+            int skippedCount = 0;
+            
+            // Save each partition to database
+            for (PartitionInfo partInfo : systemPartitions) {
+                String driveLetter = partInfo.getDriveLetter();
+                long sizeGB = partInfo.getSizeGB();
+                
+                // Check if partition already exists
+                Partition existingPartition = partitionDAO.getPartitionByDriveAndMachine(
+                    driveLetter, 
+                    currentMachine.getMachineId(), 
+                    user.getUserId()
+                );
+                
+                if (existingPartition != null) {
+                    System.out.println("  - " + driveLetter + " (" + sizeGB + " GB) - Already exists, skipping");
+                    skippedCount++;
+                    
+                    // Update size if it has changed
+                    if (existingPartition.getSizeGb() != (int) sizeGB) {
+                        existingPartition.setSizeGb((int) sizeGB);
+                        partitionDAO.updatePartition(existingPartition);
+                        System.out.println("    Updated size to " + sizeGB + " GB");
+                    }
+                } else {
+                    // Create new partition record
+                    Partition newPartition = new Partition(
+                        currentMachine.getMachineId(),
+                        user.getUserId(),
+                        driveLetter,
+                        (int) sizeGB,
+                        new Date(System.currentTimeMillis())
+                    );
+                    
+                    if (partitionDAO.createPartition(newPartition)) {
+                        System.out.println("  ✓ " + driveLetter + " (" + sizeGB + " GB) - Saved successfully");
+                        savedCount++;
+                    } else {
+                        System.err.println("  ✗ " + driveLetter + " - Failed to save");
+                    }
+                }
+            }
+            
+            System.out.println("\nSummary: " + savedCount + " new partition(s) saved, " + skippedCount + " already existed");
+            System.out.println("=== Partition Sync Complete ===\n");
+            
+            // Log partition synchronization activity
+            if (savedCount > 0 || skippedCount > 0) {
+                ActivityLogger.logSystemSync(user.getUserId(), currentMachine.getMachineId(), 
+                    savedCount + skippedCount);
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error saving partitions to database: " + e.getMessage());
+            e.printStackTrace();
+            
+            // Log error activity
+            try {
+                Machine currentMachine = machineDAO.getOrCreateCurrentMachine(user.getUserId());
+                if (currentMachine != null) {
+                    ActivityLogger.logError(user.getUserId(), currentMachine.getMachineId(), 
+                        "Failed to sync partitions: " + e.getMessage());
+                }
+            } catch (Exception logEx) {
+                System.err.println("Failed to log error: " + logEx.getMessage());
+            }
+        }
+    }
+    
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new LoginForm().setVisible(true));
     }
