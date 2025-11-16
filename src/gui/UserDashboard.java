@@ -148,7 +148,7 @@ public class UserDashboard extends JFrame {
         
         // Add manual refresh button for better performance
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton refreshBtn = new JButton("🔄 Refresh Disks");
+        JButton refreshBtn = new JButton("Refresh Disks");
         refreshBtn.setFont(new Font("Segoe UI", Font.BOLD, 13));
         refreshBtn.setToolTipText("Click to refresh disk information");
         refreshBtn.addActionListener(e -> {
@@ -423,13 +423,6 @@ public class UserDashboard extends JFrame {
 
     // ------------------- POWERSHELL METHODS -------------------
 
-
-
-
-
-
-
-    
 
     public static void main(String[] args){
         // For testing purposes - create a demo user
