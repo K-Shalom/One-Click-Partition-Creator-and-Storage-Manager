@@ -89,7 +89,7 @@ public class SignupForm extends JFrame {
             System.out.println("Checking if username exists: " + username);
             if (userDAO.usernameExists(username)) {
                 JOptionPane.showMessageDialog(this, 
-                    "Username '" + username + "' already exists!\nPlease choose a different username.", 
+                    "Username '" + username + "' Already exists!\nPlease choose a different username.", 
                     "Username Taken", 
                     JOptionPane.ERROR_MESSAGE);
                 return;

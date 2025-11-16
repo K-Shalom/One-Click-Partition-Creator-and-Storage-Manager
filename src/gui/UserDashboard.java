@@ -26,6 +26,16 @@ public class UserDashboard extends JFrame {
     // DAOs for database access
     private ActivityLogDAO activityLogDAO;
     private MachineDAO machineDAO;
+    
+    // Cache for disk detection to avoid repeated expensive operations
+    private File[] cachedRoots = null;
+    private long lastDiskScan = 0;
+    private static final long DISK_CACHE_MS = 30000; // Cache for 30 seconds (instant refresh)
+    
+    // Cache for unallocated space (very expensive PowerShell operation)
+    private ArrayList<Long> cachedUnallocated = null;
+    private long lastUnallocatedScan = 0;
+    private static final long UNALLOCATED_CACHE_MS = 60000; // Cache for 60 seconds
 
     public UserDashboard(User user) {
         this.currentUser = user;
@@ -82,16 +92,46 @@ public class UserDashboard extends JFrame {
         footer.setBorder(new EmptyBorder(10, 0, 10, 0));
         add(footer, BorderLayout.SOUTH);
 
-        // Start auto-refresh for Disk Monitor tab
+        // Lazy loading management (auto-refresh disabled by default for performance)
+        final boolean[] logsLoaded = {false};
+        final boolean[] disksLoaded = {false};
+        
         tabs.addChangeListener(e -> {
-            if (tabs.getSelectedIndex() == 0) startAutoRefresh();
-            else if (autoRefreshTimer != null) autoRefreshTimer.stop();
+            int selectedIndex = tabs.getSelectedIndex();
+            
+            // Disk Monitor tab - lazy load on first access
+            if (selectedIndex == 0 && !disksLoaded[0]) {
+                detectDisks();
+                disksLoaded[0] = true;
+                startAutoRefresh(); // Start auto-refresh when switching to Disk Monitor
+            } else if (selectedIndex == 0 && autoRefreshTimer == null) {
+                startAutoRefresh(); // Restart auto-refresh if returning to Disk Monitor
+            }
+            // Activity Logs tab - lazy load on first access
+            else if (selectedIndex == 1 && !logsLoaded[0]) {
+                loadActivityLogsFromDatabase();
+                logsLoaded[0] = true;
+            }
+            
+            // Stop auto-refresh when leaving Disk Monitor tab
+            if (selectedIndex != 0 && autoRefreshTimer != null) {
+                autoRefreshTimer.stop();
+            }
         });
 
         addLog(currentUser.getUsername() + " logged in");
         
-        // Load initial data from database
-        loadActivityLogsFromDatabase();
+        // Load disk data in background after UI is visible (non-blocking)
+        SwingUtilities.invokeLater(() -> {
+            // This runs after the window is shown, making dashboard appear instantly
+            // Only load if on Disk Monitor tab (which is default for users)
+            if (tabs.getSelectedIndex() == 0) {
+                detectDisks();
+                disksLoaded[0] = true;
+                // Start auto-refresh automatically at 2 seconds
+                startAutoRefresh();
+            }
+        });
     }
 
     // ---------------- DISK TAB ----------------
@@ -105,14 +145,43 @@ public class UserDashboard extends JFrame {
 
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.add(scroll, BorderLayout.CENTER);
+        
+        // Add manual refresh button for better performance
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton refreshBtn = new JButton("Refresh Disks");
+        refreshBtn.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        refreshBtn.setToolTipText("Click to refresh disk information");
+        refreshBtn.addActionListener(e -> {
+            cachedRoots = null; // Clear disk cache
+            cachedUnallocated = null; // Clear unallocated cache
+            PartitionOperations.clearVolumeCache(); // Clear volume cache
+            detectDisks();
+            addLog("Disk information refreshed");
+        });
+        
+        buttonPanel.add(refreshBtn);
+        panel.add(buttonPanel, BorderLayout.SOUTH);
 
-        detectDisks();
+        // Don't call detectDisks here - it will be called in background after UI loads
+        // This makes dashboard appear instantly
         return panel;
     }
 
     private void detectDisks() {
+        // Use cached roots if available and fresh
+        long currentTime = System.currentTimeMillis();
+        File[] roots;
+        
+        if (cachedRoots != null && (currentTime - lastDiskScan) < DISK_CACHE_MS) {
+            roots = cachedRoots;
+        } else {
+            roots = File.listRoots();
+            cachedRoots = roots;
+            lastDiskScan = currentTime;
+        }
+        
+        // Always rebuild UI to show latest changes (volume labels, etc.)
         diskPanel.removeAll();
-        File[] roots = File.listRoots();
         long totalDiskSize = 0;
 
         if (roots != null) {
@@ -130,7 +199,7 @@ public class UserDashboard extends JFrame {
                 ));
                 card.setBackground(Color.WHITE);
 
-                // Get volume label
+                // Get volume label (cached to avoid expensive PowerShell calls)
                 String driveLetter = root.getAbsolutePath().replace("\\", "").replace(":", "");
                 String volumeLabel = PartitionOperations.getVolumeLabel(driveLetter);
                 String displayName = volumeLabel.isEmpty() ? root.getAbsolutePath() : volumeLabel + " (" + root.getAbsolutePath() + ")";
@@ -187,8 +256,17 @@ public class UserDashboard extends JFrame {
             }
         }
 
-        // Unallocated spaces
-        ArrayList<Long> unallocatedSpaces = getUnallocatedSpaces();
+        // Unallocated spaces (cached to avoid expensive PowerShell)
+        ArrayList<Long> unallocatedSpaces;
+        long currentTimeUnalloc = System.currentTimeMillis();
+        
+        if (cachedUnallocated != null && (currentTimeUnalloc - lastUnallocatedScan) < UNALLOCATED_CACHE_MS) {
+            unallocatedSpaces = cachedUnallocated;
+        } else {
+            unallocatedSpaces = getUnallocatedSpaces();
+            cachedUnallocated = unallocatedSpaces;
+            lastUnallocatedScan = currentTimeUnalloc;
+        }
         for(Long size : unallocatedSpaces){
             double sizeGB = size / 1_073_741_824.0;
             if(sizeGB < 1) continue;
@@ -283,6 +361,7 @@ public class UserDashboard extends JFrame {
     
     /**
      * Load activity logs from database for current user and display
+     * Uses optimized query with JOIN to avoid N+1 problem
      */
     private void loadActivityLogsFromDatabase() {
         try {
@@ -291,10 +370,10 @@ public class UserDashboard extends JFrame {
                 return;
             }
             
-            // Get logs for current user only
-            List<ActivityLog> activityLogs = activityLogDAO.getLogsByUserId(currentUser.getUserId());
+            // Get formatted logs for current user (optimized with JOIN)
+            List<String> formattedLogs = activityLogDAO.getLogsByUserIdFormatted(currentUser.getUserId());
             
-            if (activityLogs == null) {
+            if (formattedLogs == null) {
                 addLog("Warning: Could not load activity logs from database (connection may be unavailable)");
                 return;
             }
@@ -305,17 +384,7 @@ public class UserDashboard extends JFrame {
             logs.add("User: " + currentUser.getUsername() + " (ID: " + currentUser.getUserId() + ")");
             logs.add("");
             
-            for (ActivityLog log : activityLogs) {
-                // Get machine info
-                Machine machine = machineDAO.getMachineById(log.getMachineId());
-                String machineName = (machine != null) ? machine.getMachineName() : "Unknown";
-                
-                String logEntry = String.format("[%s] Machine: %s | Action: %s",
-                    log.getLogDate().toString(),
-                    machineName,
-                    log.getAction());
-                logs.add(logEntry);
-            }
+            logs.addAll(formattedLogs);
             
             logs.add("");
             logs.add("=== End of Database Logs ===");
@@ -323,7 +392,7 @@ public class UserDashboard extends JFrame {
             logs.add("=== Local Session Logs ===");
             
             updateLogArea();
-            addLog("Loaded " + activityLogs.size() + " activity logs from database");
+            addLog("Loaded " + formattedLogs.size() + " activity logs from database");
         } catch (Exception e) {
             addLog("Error loading activity logs: " + e.getMessage());
             System.err.println("Error loading activity logs: " + e.getMessage());
@@ -333,6 +402,7 @@ public class UserDashboard extends JFrame {
 
     private void startAutoRefresh(){
         if(autoRefreshTimer!=null) autoRefreshTimer.stop();
+        // Auto-refresh every 2 seconds (hidden, always enabled)
         autoRefreshTimer = new Timer(2000,e -> detectDisks());
         autoRefreshTimer.start();
     }
@@ -353,13 +423,6 @@ public class UserDashboard extends JFrame {
 
     // ------------------- POWERSHELL METHODS -------------------
 
-
-
-
-
-
-
-    
 
     public static void main(String[] args){
         // For testing purposes - create a demo user
