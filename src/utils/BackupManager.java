@@ -13,8 +13,8 @@ public class BackupManager {
     private static final String DB_PASSWORD = ""; // empty password
 
     private static final String[] BACKUP_PATHS = {
-            "C:\\backups\\onclick_backup.sql",
-            "G:\\My Drive\\Oneclick_Partition_Backup\\onclick_backup.sql"
+            "X:\\backups\\onclick_backup.sql",
+            "G:\\My Drive\\OneclickPartitionBackup\\onclick_backup.sql"
     };
 
     public static String backupDatabase() {
@@ -22,7 +22,7 @@ public class BackupManager {
             File mysqldump = new File(MYSQLDUMP_PATH);
             if (!mysqldump.exists()) {
                 JOptionPane.showMessageDialog(null,
-                        "❌ Backup Error\nCannot find mysqldump.exe. Please check path:\n" + MYSQLDUMP_PATH,
+                        "Backup Error\nCannot find mysqldump.exe. Please check path:\n" + MYSQLDUMP_PATH,
                         "Backup Error", JOptionPane.ERROR_MESSAGE);
                 return null;
             }
@@ -46,7 +46,7 @@ public class BackupManager {
                 int exitCode = process.waitFor();
                 if (exitCode != 0) {
                     JOptionPane.showMessageDialog(null,
-                            "❌ Backup failed at path:\n" + path,
+                            "Backup failed at path:\n" + path,
                             "Backup Error", JOptionPane.ERROR_MESSAGE);
                     return null;
                 }
@@ -58,7 +58,7 @@ public class BackupManager {
         } catch (IOException | InterruptedException e) {
             e.printStackTrace();
             JOptionPane.showMessageDialog(null,
-                    "❌ Backup Error\n" + e.getMessage(),
+                    "Backup Error\n" + e.getMessage(),
                     "Backup Error", JOptionPane.ERROR_MESSAGE);
             return null;
         }
@@ -67,7 +67,7 @@ public class BackupManager {
     // Optional: show backup result
     public static void showBackupResult(String message) {
         if (message != null) {
-            JOptionPane.showMessageDialog(null, "✅ " + message, "Backup Complete", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(null, " " + message, "Backup Complete", JOptionPane.INFORMATION_MESSAGE);
         }
     }
 }

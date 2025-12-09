@@ -1,0 +1,10 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="oneclick:jar2">
+    <output-path>$PROJECT_DIR$</output-path>
+    <root id="archive" name="oneclick.jar">
+      <element id="module-output" name="oneclick" />
+      <element id="library" level="project" name="mysql-connector-j-8.4.0" />
+      <element id="extracted-dir" path="$USER_HOME$/Desktop/GVEI system/Gvie system/mysql-connector-j-9.5.0.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>

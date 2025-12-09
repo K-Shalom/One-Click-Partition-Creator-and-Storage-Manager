@@ -22,7 +22,7 @@ public class TestDatabaseConnection {
         Connection conn = DatabaseConnection.getConnection();
         
         if (conn != null) {
-            System.out.println("✓ SUCCESS: Database connected!");
+            System.out.println(" SUCCESS: Database connected!");
             System.out.println();
             
             // Test 2: Create Test User
@@ -40,7 +40,7 @@ public class TestDatabaseConnection {
                 System.out.println("   Username: " + testUser.getUsername());
                 System.out.println("   Role: " + testUser.getRole());
             } else {
-                System.out.println("✗ FAILED: Could not create user");
+                System.out.println(" FAILED: Could not create user");
             }
             
             System.out.println();
@@ -49,7 +49,7 @@ public class TestDatabaseConnection {
             System.out.println("========================================");
             
         } else {
-            System.out.println("✗ FAILED: Could not connect to database!");
+            System.out.println(" FAILED: Could not connect to database!");
             System.out.println();
             System.out.println("TROUBLESHOOTING STEPS:");
             System.out.println("1. Make sure MySQL/MariaDB is running");
