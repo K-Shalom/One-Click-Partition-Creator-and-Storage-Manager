@@ -25,7 +25,7 @@ public class DatabaseConnection {
             props.load(fis);
             fis.close();
 
-            DB_URL = props.getProperty("db.url", "jdbc:mysql://localhost:3306/onclick_db");
+            DB_URL = props.getProperty("db.url", "jdbc:mysql://localhost:3306/onclick_db?useSSL=false&serverTimezone=UTC");
             DB_USER = props.getProperty("db.user", "root");
             DB_PASSWORD = props.getProperty("db.password", "");
         } catch (IOException e) {
