@@ -32,7 +32,8 @@ public class PartitionOperations {
 
         new Thread(() -> {
             try {
-                ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", command);
+                String wrapped = "$ErrorActionPreference='Stop'; " + command + "; try { Start-Sleep -Milliseconds 500; Update-HostStorageCache -ErrorAction SilentlyContinue } catch {}";
+                ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", wrapped);
                 pb.redirectErrorStream(true);
                 Process process = pb.start();
 
@@ -43,13 +44,23 @@ public class PartitionOperations {
                     output.append(line).append("\n");
                 }
                 reader.close();
-                process.waitFor();
+                int exitCode = process.waitFor();
 
                 String result = output.toString();
-                if (result.contains("No MSFT_Partition objects found")) {
-                    System.err.println("[ERROR] " + actionDescription + " failed: Partition not found.");
+                boolean likelyError = exitCode != 0
+                        || result.toLowerCase().contains("error")
+                        || result.toLowerCase().contains("denied")
+                        || result.toLowerCase().contains("unauthorized")
+                        || result.contains("No MSFT_Partition objects found");
+                if (likelyError) {
+                    System.err.println("[ERROR] " + actionDescription + ":\n" + result);
+                    final String details = summarizeOutput(result);
+                    SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(parent,
+                            actionDescription + " failed.\nIf you are not running as Administrator, please run the app as Admin.\n\nDetails:\n" + details,
+                            "Operation Failed",
+                            JOptionPane.ERROR_MESSAGE));
                 } else {
-                    System.out.println("[SUCCESS] " + actionDescription);
+                    System.out.println("[SUCCESS] " + actionDescription + (result.isEmpty() ? "" : ("\n" + result)));
                 }
 
             } catch (Exception e) {
@@ -65,6 +76,15 @@ public class PartitionOperations {
         }).start();
 
         loader.setVisible(true);
+    }
+
+    private static String summarizeOutput(String output) {
+        if (output == null) return "";
+        String[] lines = output.split("\n");
+        int start = Math.max(0, lines.length - 6);
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < lines.length; i++) sb.append(lines[i]).append("\n");
+        return sb.toString().trim();
     }
     
     /**
@@ -114,23 +134,44 @@ public class PartitionOperations {
      */
     public static void executeShrinkVolume(JFrame parent, String drive, long totalBytes, long freeBytes, 
                                           User user, MachineDAO machineDAO, Runnable refreshCallback) {
+        if (drive == null || drive.trim().isEmpty()) return;
+        drive = drive.replace(":", "").trim().toUpperCase();
         double totalGB = totalBytes / 1_073_741_824.0;
-        double freeGB = freeBytes / 1_073_741_824.0;
-
+        long sizeMinBytes = totalBytes;
+        try {
+            String cmdMin = "(Get-PartitionSupportedSize -DriveLetter " + drive + ").SizeMin";
+            ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", cmdMin);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String s = r.readLine();
+            r.close();
+            if (s != null && !s.trim().isEmpty()) {
+                sizeMinBytes = Long.parseLong(s.trim());
+            }
+        } catch (Exception ignored) {}
+        double maxShrinkGB = Math.max(0, (totalBytes - sizeMinBytes) / 1_073_741_824.0);
         String shrinkInput = JOptionPane.showInputDialog(parent, "Enter amount to shrink (GB):", 
-                                                         String.format("%.2f", freeGB));
+                                                         String.format("%.2f", maxShrinkGB));
         if (shrinkInput != null && !shrinkInput.trim().isEmpty()) {
             try {
                 double shrinkBy = Double.parseDouble(shrinkInput.trim());
-                double newSize = totalGB - shrinkBy;
-                if (newSize <= 0) {
+                if (shrinkBy > maxShrinkGB) shrinkBy = maxShrinkGB;
+                long shrinkBytes = (long) Math.round(shrinkBy * 1_073_741_824.0);
+                long newSizeBytes = totalBytes - shrinkBytes;
+                if (newSizeBytes < sizeMinBytes) newSizeBytes = sizeMinBytes;
+                if (newSizeBytes <= 0) {
                     JOptionPane.showMessageDialog(parent, "Shrink too large! Resulting size invalid.", 
                                                  "Error", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-                String cmd = "Resize-Partition -DriveLetter " + drive + " -Size " + newSize + "GB -Confirm:$false";
-                String action = "Shrink Volume on " + drive + " by " + shrinkBy + "GB";
-                
+                long shrinkMB = (long) Math.max(1, Math.round(shrinkBytes / 1_048_576.0));
+                String cmd = "$drive='" + drive + "'; $size=" + newSizeBytes + "; $shrinkMB=" + shrinkMB + "; " +
+                        "try { Resize-Partition -DriveLetter $drive -Size $size -Confirm:$false } " +
+                        "catch { $script = \"select volume $drive`r`nshrink desired=$shrinkMB\"; " +
+                        "$path = [IO.Path]::GetTempFileName()+'.txt'; Set-Content -Path $path -Value $script; " +
+                        "diskpart /s $path; Remove-Item $path -Force }";
+                String action = "Shrink Volume on " + drive + " by " + String.format("%.2f", shrinkBy) + "GB";
                 ActivityLogger.logCustomAction(user.getUserId(), getMachineId(user, machineDAO), action);
                 runPowerShellAsync(parent, cmd, action, refreshCallback);
             } catch (NumberFormatException ex) {
@@ -145,19 +186,34 @@ public class PartitionOperations {
      */
     public static void executeExtendVolume(JFrame parent, String drive, long totalBytes, long unallocatedBytes,
                                           User user, MachineDAO machineDAO, Runnable refreshCallback) {
+        if (drive == null || drive.trim().isEmpty()) return;
+        drive = drive.replace(":", "").trim().toUpperCase();
         double totalGB = totalBytes / 1_073_741_824.0;
-        double unallocatedGB = unallocatedBytes / 1_073_741_824.0;
-
+        long sizeMaxBytes = totalBytes;
+        try {
+            String cmdMax = "(Get-PartitionSupportedSize -DriveLetter " + drive + ").SizeMax";
+            ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", cmdMax);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String s = r.readLine();
+            r.close();
+            if (s != null && !s.trim().isEmpty()) {
+                sizeMaxBytes = Long.parseLong(s.trim());
+            }
+        } catch (Exception ignored) {}
+        double maxExtendGB = Math.max(0, (sizeMaxBytes - totalBytes) / 1_073_741_824.0);
         String extendInput = JOptionPane.showInputDialog(parent, "Enter amount to extend (GB):", 
-                                                         String.format("%.2f", unallocatedGB));
+                                                         String.format("%.2f", maxExtendGB));
         if (extendInput != null && !extendInput.trim().isEmpty()) {
             try {
                 double extendBy = Double.parseDouble(extendInput.trim());
-                if (extendBy > unallocatedGB) extendBy = unallocatedGB;
-                double newSize = totalGB + extendBy;
-                String cmd = "Resize-Partition -DriveLetter " + drive + " -Size " + newSize + "GB -Confirm:$false";
-                String action = "Extend Volume on " + drive + " by " + extendBy + "GB";
-                
+                if (extendBy > maxExtendGB) extendBy = maxExtendGB;
+                long extendBytes = (long) Math.round(extendBy * 1_073_741_824.0);
+                long newSizeBytes = totalBytes + extendBytes;
+                if (newSizeBytes > sizeMaxBytes) newSizeBytes = sizeMaxBytes;
+                String cmd = "Resize-Partition -DriveLetter " + drive + " -Size " + newSizeBytes + " -Confirm:$false";
+                String action = "Extend Volume on " + drive + " by " + String.format("%.2f", extendBy) + "GB";
                 ActivityLogger.logCustomAction(user.getUserId(), getMachineId(user, machineDAO), action);
                 runPowerShellAsync(parent, cmd, action, refreshCallback);
             } catch (NumberFormatException ex) {
@@ -265,6 +321,57 @@ public class PartitionOperations {
             ActivityLogger.logCustomAction(user.getUserId(), getMachineId(user, machineDAO), 
                                           "Created New Volume " + drive + " on Disk " + diskNumber + " with " + filesystem);
             runPowerShellAsync(parent, cmd, action, refreshCallback);
+        }
+    }
+
+    public static void executeCreateVolume(JFrame parent, long diskNumber, User user, MachineDAO machineDAO,
+                                           Runnable refreshCallback) {
+        String sizeInput = JOptionPane.showInputDialog(parent, "Enter size (GB):", "1");
+        if (sizeInput == null || sizeInput.trim().isEmpty()) return;
+        double sizeGB;
+        try { sizeGB = Double.parseDouble(sizeInput.trim()); } catch (Exception ex) {
+            JOptionPane.showMessageDialog(parent, "Invalid size.", "Error", JOptionPane.ERROR_MESSAGE); return; }
+        String[] fileSystems = {"NTFS", "FAT32", "exFAT"};
+        String filesystem = (String) JOptionPane.showInputDialog(parent, "Select FileSystem:", "Create Volume",
+                JOptionPane.QUESTION_MESSAGE, null, fileSystems, fileSystems[0]);
+        if (filesystem == null) return;
+        String label = JOptionPane.showInputDialog(parent, "Enter Volume Label:", "New Volume");
+        if (label == null) label = "New Volume";
+        String drive = JOptionPane.showInputDialog(parent, "Enter Drive Letter (e.g., E):");
+        if (drive == null || drive.trim().isEmpty()) return;
+        drive = drive.replace(":", "").trim().toUpperCase();
+        long sizeBytes = (long) Math.round(sizeGB * 1_073_741_824.0);
+        String cmd = "New-Partition -DiskNumber " + diskNumber + " -Size " + sizeBytes + " -DriveLetter " + drive
+                   + " | Format-Volume -FileSystem " + filesystem + " -NewFileSystemLabel '" + label + "' -Confirm:$false";
+        String action = "Create Volume " + drive + " on Disk " + diskNumber + " (" + sizeGB + "GB)";
+        ActivityLogger.logCustomAction(user.getUserId(), getMachineId(user, machineDAO), action);
+        runPowerShellAsync(parent, cmd, action, refreshCallback);
+    }
+
+    public static void showSupportedSize(JFrame parent, String drive) {
+        if (drive == null || drive.trim().isEmpty()) return;
+        drive = drive.replace(":", "").trim().toUpperCase();
+        try {
+            String cmd = "$s=Get-PartitionSupportedSize -DriveLetter " + drive + "; Write-Output $s.SizeMin; Write-Output $s.SizeMax";
+            ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-Command", cmd);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String minStr = r.readLine();
+            String maxStr = r.readLine();
+            r.close();
+            long min = (minStr != null && !minStr.trim().isEmpty()) ? Long.parseLong(minStr.trim()) : -1;
+            long max = (maxStr != null && !maxStr.trim().isEmpty()) ? Long.parseLong(maxStr.trim()) : -1;
+            double minGB = (min >= 0) ? (min / 1_073_741_824.0) : -1;
+            double maxGB = (max >= 0) ? (max / 1_073_741_824.0) : -1;
+            JOptionPane.showMessageDialog(parent,
+                    "Supported size for " + drive + ":\n" +
+                            "Min: " + (minGB >= 0 ? String.format("%.2f GB", minGB) : "n/a") + "\n" +
+                            "Max: " + (maxGB >= 0 ? String.format("%.2f GB", maxGB) : "n/a"),
+                    "Partition Supported Size",
+                    JOptionPane.INFORMATION_MESSAGE);
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(parent, "Failed to query supported size: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 }
